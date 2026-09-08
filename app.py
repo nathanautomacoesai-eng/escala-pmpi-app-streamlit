@@ -234,7 +234,6 @@ def conectar_banco():
         )
     ''')
     
-    # Garantir criação de colunas caso o banco já existisse previamente
     try:
         cursor.execute("ALTER TABLE efetivo ADD COLUMN posto_graduacao TEXT")
     except sqlite3.OperationalError:
@@ -390,7 +389,7 @@ data_inicio = st.sidebar.date_input("Data de Início:", value=datetime.today())
 dias_escala = st.sidebar.number_input("Quantidade de Dias:", min_value=1, max_value=60, value=30, step=1)
 
 # --- ABAS DA APLICAÇÃO ---
-aba_painel, aba_cadastro = st.tabs(["📊 Painel de Escalas", "👥 Cadastro de Policiais (P/1)"])
+aba_painel, aba_visao_geral, aba_cadastro = st.tabs(["📊 Painel de Escalas", "📈 Visão Geral", "👥 Cadastro de Policiais"])
 
 # -----------------------------------------------------------------
 # TELA 1: PAINEL DE ESCALAS
@@ -402,7 +401,6 @@ with aba_painel:
         
     st.title(f"SISTEMA DE GESTÃO - {subtitulo_opm}")
     
-    # Query filtrada
     if companhia_selecionada == "Todas":
         query_efetivo = "SELECT * FROM efetivo WHERE batalhao = ?"
         params_efetivo = (batalhao_selecionado,)
@@ -472,7 +470,7 @@ with aba_painel:
                     st.success("Escala antiga limpa!")
                     st.rerun()
             else:
-                if st.button("Gerar Escala no Python", type="primary", use_container_width=True):
+                if st.button("Gerar Escala", type="primary", use_container_width=True):
                     if df_efetivo.empty:
                         st.error("Cadastre policiais para esta unidade antes de gerar!")
                     else:
@@ -575,17 +573,100 @@ with aba_painel:
             hide_index=True,
             column_config={"data": "Data", "turno": "Turno", "policial_escalado": "Policial Escalado"}
         )
-        st.caption("Desenvolvido por: Nathanael Augusto")
 
 # -----------------------------------------------------------------
-# TELA 2: CADASTRO E EDIÇÃO DE PMs (P/1)
+# TELA 2: VISÃO GERAL / DASHBOARD
+# -----------------------------------------------------------------
+with aba_visao_geral:
+    st.title("📈 Visão Geral do Efetivo")
+    
+    df_todos = pd.read_sql_query("SELECT * FROM efetivo", conn)
+    
+    if df_todos.empty:
+        st.info("Nenhum policial cadastrado no banco para exibir métricas.")
+    else:
+        # --- CARDS DE MÉTRICAS NO TOPO ---
+        total_pms = len(df_todos)
+        total_ativos = len(df_todos[df_todos['status'] == 'Ativo'])
+        total_ferias = len(df_todos[df_todos['status'] == 'Férias'])
+        total_indisponiveis = total_pms - total_ativos
+        taxa_prontidao = round((total_ativos / total_pms) * 100, 1) if total_pms > 0 else 0
+        
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Efetivo Total", f"{total_pms} PMs")
+        m2.metric("Prontos p/ Serviço", f"{total_ativos} PMs", delta=f"{taxa_prontidao}% do Total")
+        m3.metric("Em Férias", f"{total_ferias} PMs")
+        m4.metric("Indisponíveis", f"{total_indisponiveis} PMs", delta_color="inverse")
+        
+        st.write("---")
+        
+        # --- LINHA 1 DE GRÁFICOS / TABELAS ---
+        col_g1, col_g2 = st.columns(2)
+        
+        with col_g1:
+            st.subheader("📌 Efetivo por Batalhão / Unidade")
+            df_bat = df_todos.groupby(['batalhao', 'status']).size().unstack(fill_value=0)
+            st.bar_chart(df_bat)
+            
+        with col_g2:
+            st.subheader("🎖️ Distribuição por Posto / Graduação")
+            df_posto = df_todos['posto_graduacao'].value_counts().reset_index()
+            df_posto.columns = ['Posto / Graduação', 'Quantidade']
+            st.dataframe(df_posto, use_container_width=True, hide_index=True)
+
+        st.write("---")
+
+        # --- LINHA 2 DE GRÁFICOS / TABELAS ---
+        col_g3, col_g4 = st.columns(2)
+        
+        with col_g3:
+            st.subheader("🏢 Efetivo por Companhia / UISP")
+            df_cia = df_todos['companhia'].value_counts().reset_index()
+            df_cia.columns = ['Companhia / UISP', 'Total PMs']
+            st.dataframe(df_cia, use_container_width=True, hide_index=True)
+            
+        with col_g4:
+            st.subheader("🚦 Situação Atual do Efetivo")
+            df_status = df_todos['status'].value_counts().reset_index()
+            df_status.columns = ['Status', 'Total']
+            st.dataframe(df_status, use_container_width=True, hide_index=True)
+
+# -----------------------------------------------------------------
+# TELA 3: CADASTRO E EDIÇÃO DE PMs
 # -----------------------------------------------------------------
 with aba_cadastro:
-    st.title("Gerenciamento do Efetivo - P/1")
+    st.title("Gerenciamento do Efetivo")
     
+    if st.button("🚀 Gerar Base Fictícia para Testes"):
+        pms_ficticios = [
+            ("101001-1", "Capitão (Cap)", "Silva", "Ativo", "1º BPM (Teresina - Centro/Zona Sul)", "1ª Cia: Centro Comercial"),
+            ("101002-2", "1º Tenente (1º Ten)", "Oliveira", "Ativo", "1º BPM (Teresina - Centro/Zona Sul)", "1ª Cia: Centro Comercial"),
+            ("101003-3", "1º Sargento (1º Sgt)", "Santos", "Ativo", "1º BPM (Teresina - Centro/Zona Sul)", "2ª Cia: Bairro Vermelha e Ilhotas"),
+            ("101004-4", "2º Sargento (2º Sgt)", "Souza", "Férias", "1º BPM (Teresina - Centro/Zona Sul)", "2ª Cia: Bairro Vermelha e Ilhotas"),
+            ("101005-5", "Cabo (Cb)", "Lima", "Ativo", "1º BPM (Teresina - Centro/Zona Sul)", "3ª Cia: Bairro Poti Velho / Primavera"),
+            ("101006-6", "Soldado (Sd)", "Ferreira", "Ativo", "1º BPM (Teresina - Centro/Zona Sul)", "3ª Cia: Bairro Poti Velho / Primavera"),
+            ("101007-7", "Major (Maj)", "Costa", "Ativo", "5º BPM (Teresina - Zona Leste)", "1ª Cia: Bairro Ininga e Jóquei"),
+            ("101008-8", "3º Sargento (3º Sgt)", "Pereira", "Ativo", "5º BPM (Teresina - Zona Leste)", "1ª Cia: Bairro Ininga e Jóquei"),
+            ("101009-9", "Soldado (Sd)", "Alves", "Afastado", "5º BPM (Teresina - Zona Leste)", "2ª Cia: Bairro Pedra Mole e Tabajaras"),
+            ("101010-0", "Capitão (Cap)", "Rodrigues", "Ativo", "BOPE - Operações Especiais", "Sede Teresina"),
+            ("101011-1", "1º Tenente (1º Ten)", "Nascimento", "Ativo", "BOPE - Operações Especiais", "Sede Teresina"),
+            ("101012-2", "Cabo (Cb)", "Araújo", "Ativo", "BOPE - Operações Especiais", "Sede Teresina")
+        ]
+        
+        cursor = conn.cursor()
+        cont = 0
+        for pm in pms_ficticios:
+            try:
+                cursor.execute("INSERT INTO efetivo (matricula, posto_graduacao, nome_guerra, status, batalhao, companhia) VALUES (?, ?, ?, ?, ?, ?)", pm)
+                cont += 1
+            except sqlite3.IntegrityError:
+                pass
+        conn.commit()
+        st.success(f"{cont} PMs fictícios foram inseridos!")
+        st.rerun()
+
     st.subheader("Cadastrar Novo Policial")
     
-    # Seleção interativa da Unidade e Companhia para o formulário
     c_unid, c_comp = st.columns(2)
     with c_unid:
         bat_cad = st.selectbox("1. Batalhão / Unidade de Lotação:", options=list(ESTRUTURA_PMPI.keys()), key="cad_bat")
@@ -627,7 +708,6 @@ with aba_cadastro:
     st.write("---")
     st.subheader("Efetivo Cadastrado")
     
-    # Filtro da tabela de visualização do P/1
     f_bat = st.selectbox("Filtrar Tabela por Batalhão:", options=["Todos"] + list(ESTRUTURA_PMPI.keys()))
     
     if f_bat == "Todos":
@@ -638,7 +718,6 @@ with aba_cadastro:
     if df_gerenciar.empty:
         st.info("Nenhum policial cadastrado para o filtro selecionado.")
     else:
-        # Cabeçalho customizado da tabela
         col_hdr_mat, col_hdr_posto, col_hdr_nome, col_hdr_unid, col_hdr_status, col_hdr_acao = st.columns([2, 2, 3, 4, 2, 3])
         with col_hdr_mat: st.markdown("**Matrícula**")
         with col_hdr_posto: st.markdown("**Posto/Grad.**")
