@@ -1,10 +1,85 @@
 import streamlit as st
 import pandas as pd
 import sqlite3
+import base64
+import os
 from datetime import datetime, timedelta
 
 # =================================================================
-# 1. CONFIGURAÇÃO E CRIAÇÃO DO BANCO DE DADOS LOCAL (SQLITE)
+# FUNÇÃO PARA CONVERTER IMAGEM LOCAL EM BASE64
+# =================================================================
+def carregar_imagem_base64(caminho_imagem):
+    if os.path.exists(caminho_imagem):
+        with open(caminho_imagem, "rb") as image_file:
+            encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
+        return f"data:image/png;base64,{encoded_string}"
+    return ""
+
+# =================================================================
+# LISTAS DE REFERÊNCIA DA PMPI
+# =================================================================
+LISTA_PATENTES = [
+    "Coronel (Cel)",
+    "Tenente-Coronel (Ten-Cel)",
+    "Major (Maj)",
+    "Capitão (Cap)",
+    "1º Tenente (1º Ten)",
+    "2º Tenente (2º Ten)",
+    "Aspirante-a-Oficial (Asp)",
+    "Subtenente (Sub-Ten)",
+    "1º Sargento (1º Sgt)",
+    "2º Sargento (2º Sgt)",
+    "3º Sargento (3º Sgt)",
+    "Cabo (Cb)",
+    "Soldado (Sd)"
+]
+
+LISTA_OPMS_PMPI = [
+    # Capital (Teresina)
+    "1º BPM - CENTRO",
+    "5º BPM - ZONA LESTE",
+    "6º BPM - ZONA SUL",
+    "8º BPM - ZONA SUDESTE",
+    "9º BPM - ZONA NORTE",
+    "13º BPM - GRANDE SANTA MARIA",
+    "17º BPM - EXTREMO SUL / PORTO ALEGRE",
+    "21º BPM - USINA SANTANA / SUDESTE",
+    "22º BPM - PROMORAR",
+    "29º BPM - REFORÇO ZONA LESTE",
+    
+    # Interior
+    "2º BPM - PARNAÍBA",
+    "3º BPM - FLORIANO",
+    "4º BPM - PICOS",
+    "7º BPM - CORRENTE",
+    "10º BPM - URUÇUÍ",
+    "11º BPM - SÃO RAIMUNDO NONATO",
+    "12º BPM - PIRIPIRI",
+    "14º BPM - SIMPLÍCIO MENDES",
+    "15º BPM - CAMPO MAIOR",
+    "16º BPM - JOSÉ DE FREITAS",
+    "18º BPM - ÁGUA BRANCA",
+    "19º BPM - BOM JESUS",
+    "20º BPM - PAULISTANA",
+    "23º BPM - VALENÇA DO PIAUÍ",
+    "24º BPM - LUÍS CORREIA",
+    "27º BPM - PARNAÍBA (DIVISA NORTE)",
+    "30º BPM - BARRAS",
+    "31º BPM - COCAL",
+    
+    # Especializados
+    "BOPE - OPERAÇÕES ESPECIAIS",
+    "BPRONE - RONDAS ESPECIAIS",
+    "BPCHOQUE - POLICIAMENTO DE CHOQUE",
+    "BPROCAM - RONDAS SOBRE MOTOCICLETAS",
+    "BEPI - POLICIAMENTO DO INTERIOR",
+    "BPA - POLICIAMENTO AMBIENTAL",
+    "BPTRAN - POLICIAMENTO DE TRÂNSITO",
+    "BPGDAS - POLICIAMENTO DE GUARDA"
+]
+
+# =================================================================
+# 1. BANCO DE DADOS LOCAL (SQLITE)
 # =================================================================
 def conectar_banco():
     conn = sqlite3.connect('escala.db')
@@ -14,29 +89,49 @@ def conectar_banco():
         CREATE TABLE IF NOT EXISTS efetivo (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             matricula TEXT UNIQUE,
+            posto_graduacao TEXT,
             nome_guerra TEXT,
-            status TEXT
+            status TEXT,
+            batalhao TEXT
         )
     ''')
     
+    try:
+        cursor.execute("ALTER TABLE efetivo ADD COLUMN posto_graduacao TEXT")
+    except sqlite3.OperationalError:
+        pass
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS escala (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             data TEXT,
             turno TEXT,
-            policial_escalado TEXT
+            policial_escalado TEXT,
+            batalhao TEXT
         )
     ''')
     conn.commit()
     return conn
 
-conn = conectar_banco()
+def obter_batalhoes_cadastrados(conn):
+    df_batalhoes = pd.read_sql_query("SELECT DISTINCT batalhao FROM efetivo WHERE batalhao IS NOT NULL AND batalhao != ''", conn)
+    if not df_batalhoes.empty:
+        return sorted(df_batalhoes['batalhao'].tolist())
+    return [LISTA_OPMS_PMPI[0]]
 
 # =================================================================
-# 2. ALGORITMO INTELIGENTE BASEADO EM DATAS REAIS
+# 2. ALGORITMO DE GERAÇÃO DE ESCALA
 # =================================================================
 def gerar_escala_inteligente(df_efetivo, df_escala, regime):
-    pms_ativos = df_efetivo[df_efetivo['status'] == 'Ativo']['nome_guerra'].tolist()
+    if 'posto_graduacao' in df_efetivo.columns:
+        df_efetivo['nome_completo'] = df_efetivo.apply(
+            lambda r: f"{r['posto_graduacao']} {r['nome_guerra']}" if pd.notnull(r['posto_graduacao']) and r['posto_graduacao'] != "" else r['nome_guerra'], 
+            axis=1
+        )
+    else:
+        df_efetivo['nome_completo'] = df_efetivo['nome_guerra']
+
+    pms_ativos = df_efetivo[df_efetivo['status'] == 'Ativo']['nome_completo'].tolist()
     if not pms_ativos:
         return None
 
@@ -55,8 +150,8 @@ def gerar_escala_inteligente(df_efetivo, df_escala, regime):
             data_atual = data_atual + timedelta(hours=7)
 
         policial_escolhido = ""
-        
         candidatos_validos = []
+        
         for pm in pms_ativos:
             if ultimo_servico[pm] is None:
                 candidatos_validos.append((pm, datetime.min))
@@ -88,15 +183,15 @@ def gerar_escala_inteligente(df_efetivo, df_escala, regime):
     return df_escala
 
 # =================================================================
-# 3. INTERFACE VISUAL - STREAMLIT
+# 3. INTERFACE VISUAL
 # =================================================================
 st.set_page_config(page_title="Sistema PMPI - Multi-Batalhão", layout="wide")
 
+conn = conectar_banco()
+lista_batalhoes_filtrados = obter_batalhoes_cadastrados(conn)
+
 st.sidebar.header("⚙️ Configurações da OPM")
-nome_batalhao = st.sidebar.text_input(
-    "Identificação da Unidade:", 
-    value="24º BATALHÃO DE POLÍCIA MILITAR - BPM"
-)
+batalhao_selecionado = st.sidebar.selectbox("Unidade Policial (OPM):", lista_batalhoes_filtrados)
 
 qtd_pms_por_turno = st.sidebar.number_input(
     "PMs por Turno / Guarnição:", 
@@ -111,16 +206,14 @@ dias_escala = st.sidebar.number_input("Quantidade de Dias:", min_value=1, max_va
 
 aba_painel, aba_cadastro = st.tabs(["📊 Painel de Escalas", "👥 Cadastro de Policiais (P/1)"])
 
-conn = conectar_banco()
-
 # -----------------------------------------------------------------
 # TELA 1: PAINEL DE ESCALAS
 # -----------------------------------------------------------------
 with aba_painel:
-    st.title(f"SISTEMA DE GESTÃO - {nome_batalhao.upper()}")
+    st.title(f"SISTEMA DE GESTÃO - {batalhao_selecionado.upper()}")
     
-    df_efetivo = pd.read_sql_query("SELECT * FROM efetivo", conn)
-    df_escala_banco = pd.read_sql_query("SELECT data, turno, policial_escalado FROM escala", conn)
+    df_efetivo = pd.read_sql_query("SELECT * FROM efetivo WHERE batalhao = ?", conn, params=(batalhao_selecionado,))
+    df_escala_banco = pd.read_sql_query("SELECT data, turno, policial_escalado FROM escala WHERE batalhao = ?", conn, params=(batalhao_selecionado,))
     
     regime_detectado_banco = "24x72"
     escala_ja_foi_gerada = False
@@ -148,17 +241,18 @@ with aba_painel:
     with col1:
         st.subheader("Efetivo Pronto")
         if df_efetivo.empty:
-            st.info("Aguardando cadastro de policiais na aba P/1.")
+            st.info(f"Nenhum policial cadastrado para o {batalhao_selecionado}. Cadastre na aba P/1.")
         else:
             df_visualizacao = df_efetivo.copy()
             mapeamento_bolinhas = {"Ativo": "🟢 Ativo", "Férias": "🟡 Férias", "Afastado": "🔴 Afastado", "Licença": "🔵 Licença"}
             df_visualizacao['status'] = df_visualizacao['status'].map(mapeamento_bolinhas).fillna(df_visualizacao['status'])
+            df_visualizacao['Policial'] = df_visualizacao['posto_graduacao'].fillna('') + ' ' + df_visualizacao['nome_guerra']
             
             st.dataframe(
-                df_visualizacao[['matricula', 'nome_guerra', 'status']], 
-                width='stretch', 
+                df_visualizacao[['matricula', 'Policial', 'status']], 
+                use_container_width=True, 
                 hide_index=True,
-                column_config={"matricula": "Matrícula", "nome_guerra": "Nome de Guerra", "status": "Status"}
+                column_config={"matricula": "Matrícula", "Policial": "Posto / Nome", "status": "Status"}
             )
         
     with col2:
@@ -166,16 +260,16 @@ with aba_painel:
         with cc1:
             if conflito_de_regime:
                 st.warning(f"Escala vigente está em formato {regime_detectado_banco}!")
-                if st.button("⚠️ Limpar Escala Antiga", type="secondary", width='stretch'):
+                if st.button("⚠️ Limpar Escala Antiga", type="secondary", use_container_width=True):
                     cursor = conn.cursor()
-                    cursor.execute("DELETE FROM escala")
+                    cursor.execute("DELETE FROM escala WHERE batalhao = ?", (batalhao_selecionado,))
                     conn.commit()
                     st.success("Escala antiga limpa!")
                     st.rerun()
             else:
-                if st.button("Gerar Escala no Python", type="primary", width='stretch'):
+                if st.button("Gerar Escala no Python", type="primary", use_container_width=True):
                     if df_efetivo.empty:
-                        st.error("Cadastre policiais na outra tela antes de gerar!")
+                        st.error("Cadastre policiais para esta unidade antes de gerar!")
                     else:
                         datas_geracao = pd.date_range(start=data_inicio, periods=dias_escala, freq="D")
                         linhas_dinamicas = []
@@ -195,10 +289,11 @@ with aba_painel:
 
                         escala_gerada = gerar_escala_inteligente(df_efetivo, df_escala, regime_selecionado)
                         if escala_gerada is not None:
+                            escala_gerada['batalhao'] = batalhao_selecionado
                             cursor = conn.cursor()
-                            cursor.execute("DELETE FROM escala")
+                            cursor.execute("DELETE FROM escala WHERE batalhao = ?", (batalhao_selecionado,))
                             escala_gerada.to_sql('escala', conn, if_exists='append', index=False)
-                            st.success("Escala parametrizada gerada!")
+                            st.success(f"Escala gerada com sucesso para o {batalhao_selecionado}!")
                             st.rerun()
                         
         with cc2:
@@ -206,7 +301,10 @@ with aba_painel:
             for idx, row in df_escala.iterrows():
                 linhas_tabela += f"<tr><td>{row.iloc[0]}</td><td>{row.iloc[1]}</td><td>{row.iloc[2]}</td></tr>"
                 
-            brasao_pmpi_base64 = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 120' width='100' height='120'><path d='M50,10 C75,10 85,25 85,55 C85,85 50,110 50,110 C50,110 15,85 15,55 C15,25 25,10 50,10 Z' fill='none' stroke='%232c3e50' stroke-width='4'/><circle cx='50' cy='52' r='22' fill='none' stroke='%232c3e50' stroke-width='3'/><path d='M50,22 L50,82 M20,52 L80,52' stroke='%23e74c3c' stroke-width='2'/><path d='M35,35 L65,65 M35,65 L65,35' stroke='%23f1c40f' stroke-width='1.5'/><polygon points='50,42 53,49 61,49 55,54 57,61 50,57 43,61 45,54 39,49 47,49' fill='%23f1c40f'/></svg>"
+            # Carrega a imagem local 'brasao.png'
+            brasao_src = carregar_imagem_base64("brasao.png")
+            
+            tag_imagem = f'<img class="brasao" src="{brasao_src}" alt="Brasão PMPI">' if brasao_src else ''
                 
             html_escala = f"""
             <!DOCTYPE html>
@@ -214,28 +312,38 @@ with aba_painel:
             <head>
                 <meta charset="utf-8">
                 <style>
-                    body {{ font-family: Arial, sans-serif; color: #333; margin: 30px; }}
-                    .header {{ text-align: center; margin-bottom: 25px; }}
-                    .brasao {{ width: 85px; height: auto; margin-bottom: 12px; }}
-                    .header h1 {{ font-size: 16pt; margin: 5px 0; text-transform: uppercase; font-weight: bold; }}
-                    .header h2 {{ font-size: 12pt; margin: 5px 0; text-transform: uppercase; font-weight: normal; color: #444; }}
-                    .title {{ text-align: center; font-size: 14pt; font-weight: bold; text-transform: uppercase; margin: 25px 0; text-decoration: underline; }}
+                    body {{ font-family: Arial, sans-serif; color: #000; margin: 20px; }}
+                    .header {{ display: flex; align-items: center; justify-content: center; gap: 20px; margin-bottom: 20px; }}
+                    .brasao {{ width: 85px; height: auto; }}
+                    .header-text {{ text-align: left; }}
+                    .header h1 {{ font-size: 16pt; margin: 0; text-transform: uppercase; font-weight: bold; font-family: Arial, sans-serif; }}
+                    .title {{ text-align: center; font-size: 14pt; font-weight: bold; text-transform: uppercase; margin-top: 20px; margin-bottom: 25px; letter-spacing: 1px; }}
                     table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
-                    th {{ background-color: #2c3e50; color: white; font-size: 11pt; font-weight: bold; text-transform: uppercase; padding: 10px; border: 1px solid #1a252f; text-align: center; }}
-                    td {{ padding: 10px; border: 1px solid #bdc3c7; font-size: 11pt; text-align: center; }}
-                    tr:nth-child(even) td {{ background-color: #f9f9f9; }}
+                    th {{ background-color: #ffffff; color: #000; font-size: 11pt; font-weight: bold; text-transform: uppercase; padding: 8px; border: 1px solid #000; text-align: center; }}
+                    td {{ padding: 8px; border: 1px solid #000; font-size: 11pt; text-align: center; }}
                 </style>
             </head>
             <body>
                 <div class="header">
-                    <img class="brasao" src="{brasao_pmpi_base64}" alt="PMPI">
-                    <h1>{nome_batalhao.upper()}</h1>
-                    <h2>POLÍCIA MILITAR DO PIAUÍ</h2>
+                    {tag_imagem}
+                    <div class="header-text">
+                        <h1>{batalhao_selecionado.upper()}</h1>
+                    </div>
                 </div>
-                <div class="title">ESCALA DE SERVIÇO GERAL</div>
+                
+                <div class="title">ESCALA DE SERVIÇO</div>
+                
                 <table>
-                    <thead><tr><th>Data</th><th>Turno</th><th>Policial Escalado</th></tr></thead>
-                    <tbody>{linhas_tabela}</tbody>
+                    <thead>
+                        <tr>
+                            <th>DATA</th>
+                            <th>TURNO</th>
+                            <th>POLICIAL ESCALADO</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {linhas_tabela}
+                    </tbody>
                 </table>
                 <script>window.onload = function() {{ window.print(); }}</script>
             </body>
@@ -244,9 +352,9 @@ with aba_painel:
             st.download_button(
                 label="🖨️ Exportar PDF / Imprimir",
                 data=html_escala,
-                file_name=f"escala_{nome_batalhao.lower().replace(' ', '_')}.html",
+                file_name=f"escala_{batalhao_selecionado.lower().replace(' ', '_')}.html",
                 mime="text/html",
-                width='stretch'
+                use_container_width=True
             )
             
         with cc3:
@@ -256,69 +364,78 @@ with aba_painel:
         st.subheader("Visualização da Escala Gerada")
         st.dataframe(
             df_escala, 
-            width='stretch', 
+            use_container_width=True, 
             hide_index=True,
             column_config={"data": "Data", "turno": "Turno", "policial_escalado": "Policial Escalado"}
         )
         st.caption("Desenvolvido por: Nathanael Augusto")
 
 # -----------------------------------------------------------------
-# TELA 2: CADASTRO DE PMs
+# TELA 2: CADASTRO DE PMs (P/1)
 # -----------------------------------------------------------------
 with aba_cadastro:
     st.title("Gerenciamento do Efetivo - P/1")
     
     with st.form("form_cadastro", clear_on_submit=True):
         st.subheader("Cadastrar Novo Policial")
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3, c4, c5 = st.columns([2, 3, 3, 2, 4])
+        
         with c1:
             nova_matricula = st.text_input("Matrícula (Ex: 102345-1)")
         with c2:
-            novo_nome = st.text_input("Nome de Guerra (Ex: Cb Dos Anjos)")
+            novo_posto = st.selectbox("Posto / Graduação", options=LISTA_PATENTES)
         with c3:
+            novo_nome = st.text_input("Nome de Guerra (Ex: Geovanio)")
+        with c4:
             status_cadastro_visual = st.selectbox("Status Inicial", ["🟢 Ativo", "🟡 Férias", "🔴 Afastado", "🔵 Licença"])
             novo_status = status_cadastro_visual.split(" ")[1]
+        with c5:
+            batalhao_cadastro = st.selectbox("Batalhão / OPM", options=LISTA_OPMS_PMPI)
             
         botao_cadastrar = st.form_submit_button("Salvar Policial no Banco", type="primary")
         
         if botao_cadastrar:
-            if nova_matricula and novo_nome:
+            if nova_matricula and novo_nome and batalhao_cadastro:
                 try:
                     cursor = conn.cursor()
                     cursor.execute(
-                        "INSERT INTO efetivo (matricula, nome_guerra, status) VALUES (?, ?, ?)",
-                        (nova_matricula, novo_nome, novo_status)
+                        "INSERT INTO efetivo (matricula, posto_graduacao, nome_guerra, status, batalhao) VALUES (?, ?, ?, ?, ?)",
+                        (nova_matricula, novo_posto, novo_nome, novo_status, batalhao_cadastro)
                     )
                     conn.commit()
-                    st.success(f"{novo_nome} cadastrado com sucesso!")
+                    st.success(f"{novo_posto} {novo_nome} cadastrado com sucesso no {batalhao_cadastro}!")
                     st.rerun()
                 except sqlite3.IntegrityError:
                     st.error("Erro: Já existe um policial cadastrado com esta Matrícula!")
             else:
-                st.warning("Preencha todos os campos obrigatórios (Matrícula e Nome)!")
+                st.warning("Preencha todos os campos obrigatórios!")
 
     st.write("---")
-    st.subheader("Efetivo Cadastrado - Painel de Controle e Alterações")
+    st.subheader(f"Efetivo Cadastrado - {batalhao_selecionado}")
     
-    df_gerenciar = pd.read_sql_query("SELECT * FROM efetivo", conn)
+    df_gerenciar = pd.read_sql_query("SELECT * FROM efetivo WHERE batalhao = ?", conn, params=(batalhao_selecionado,))
     
     if df_gerenciar.empty:
-        st.info("Nenhum policial cadastrado no banco local até o momento. Use o formulário acima!")
+        st.info(f"Nenhum policial cadastrado para o {batalhao_selecionado} até o momento.")
     else:
-        col_hdr_mat, col_hdr_nome, col_hdr_status, col_hdr_acao = st.columns([2, 3, 3, 2])
+        col_hdr_mat, col_hdr_posto, col_hdr_nome, col_hdr_status, col_hdr_acao = st.columns([2, 2, 3, 3, 2])
         with col_hdr_mat: st.markdown("**Matrícula**")
+        with col_hdr_posto: st.markdown("**Posto/Grad.**")
         with col_hdr_nome: st.markdown("**Nome de Guerra**")
-        with col_hdr_status: st.markdown("**Status Atual (Mude para Atualizar)**")
+        with col_hdr_status: st.markdown("**Status Atual**")
         with col_hdr_acao: st.markdown("**Ações**")
         st.write("")
 
         lista_status_visual = ["🟢 Ativo", "🟡 Férias", "🔴 Afastado", "🔵 Licença"]
         
         for idx, row in df_gerenciar.iterrows():
-            col_mat, col_nome, col_status, col_acao = st.columns([2, 3, 3, 2])
+            col_mat, col_posto, col_nome, col_status, col_acao = st.columns([2, 2, 3, 3, 2])
             
             with col_mat:
                 st.write(row['matricula'])
+                
+            with col_posto:
+                st.write(row['posto_graduacao'] if pd.notnull(row['posto_graduacao']) else '-')
                 
             with col_nome:
                 st.write(row['nome_guerra'])
