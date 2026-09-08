@@ -267,7 +267,7 @@ with aba_painel:
                     st.success("Escala antiga limpa!")
                     st.rerun()
             else:
-                if st.button("Gerar Escala no Python", type="primary", use_container_width=True):
+                if st.button("Gerar Escala", type="primary", use_container_width=True):
                     if df_efetivo.empty:
                         st.error("Cadastre policiais para esta unidade antes de gerar!")
                     else:
