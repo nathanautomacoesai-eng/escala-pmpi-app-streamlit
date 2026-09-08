@@ -204,7 +204,7 @@ st.sidebar.header("📅 Período da Escala")
 data_inicio = st.sidebar.date_input("Data de Início:", value=datetime.today())
 dias_escala = st.sidebar.number_input("Quantidade de Dias:", min_value=1, max_value=60, value=30, step=1)
 
-aba_painel, aba_cadastro = st.tabs(["📊 Painel de Escalas", "👥 Cadastro de Policiais (P/1)"])
+aba_painel, aba_cadastro = st.tabs(["📊 Painel de Escalas", "👥 Cadastro de Policiais"])
 
 # -----------------------------------------------------------------
 # TELA 1: PAINEL DE ESCALAS
@@ -374,7 +374,7 @@ with aba_painel:
 # TELA 2: CADASTRO DE PMs (P/1)
 # -----------------------------------------------------------------
 with aba_cadastro:
-    st.title("Gerenciamento do Efetivo - P/1")
+    st.title("Gerenciamento do Efetivo")
     
     with st.form("form_cadastro", clear_on_submit=True):
         st.subheader("Cadastrar Novo Policial")
@@ -392,7 +392,7 @@ with aba_cadastro:
         with c5:
             batalhao_cadastro = st.selectbox("Batalhão / OPM", options=LISTA_OPMS_PMPI)
             
-        botao_cadastrar = st.form_submit_button("Salvar Policial no Banco", type="primary")
+        botao_cadastrar = st.form_submit_button("Salvar", type="primary")
         
         if botao_cadastrar:
             if nova_matricula and novo_nome and batalhao_cadastro:
